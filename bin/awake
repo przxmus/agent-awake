@@ -2,8 +2,8 @@
 # awake: keep the Mac awake (lid closed too) while any AI agent session is working.
 #
 # Every working session holds a lock file in $AWAKE_HOME/locks. While at least one
-# lock exists, `pmset disablesleep 1` is set; when the last one goes away, sleep is
-# re-enabled. Locks of dead agent processes or without a heartbeat for
+# lock exists, `pmset disablesleep 1` is set; when the last one goes away, the state
+# from before the first lock is restored. Locks of dead agent processes or without a heartbeat for
 # AWAKE_TTL_MIN minutes are swept (run `awake sweep` from launchd every minute).
 
 set -u
@@ -12,7 +12,12 @@ AWAKE_HOME="${AWAKE_HOME:-$HOME/.agent-awake}"
 LOCKS="$AWAKE_HOME/locks"
 LOG="$AWAKE_HOME/awake.log"
 MUTEX="$AWAKE_HOME/.mutex"
+OWNED="$AWAKE_HOME/owned"
+# Overridable for tests; the sudoers rule must match the real pmset path.
+PMSET="${AWAKE_PMSET:-/usr/bin/pmset}"
+SUDO="${AWAKE_SUDO-sudo -n}"
 AWAKE_TTL_MIN=45
+# shellcheck source=/dev/null
 [ -f "$AWAKE_HOME/config" ] && . "$AWAKE_HOME/config"
 
 mkdir -p "$LOCKS"
@@ -45,7 +50,7 @@ agent_pid() {
   local pid=$PPID comm ppid
   while [ "$pid" -gt 1 ]; do
     read -r ppid comm < <(ps -o ppid= -o comm= -p "$pid" 2>/dev/null) || break
-    case "$(basename "$comm" | tr 'A-Z' 'a-z')" in
+    case "$(basename "$comm" | tr '[:upper:]' '[:lower:]')" in
       claude* | codex*) echo "$pid"; return ;;
     esac
     pid=$ppid
@@ -54,19 +59,34 @@ agent_pid() {
 }
 
 current_state() {
-  pmset -g | awk '/SleepDisabled/ { print $2 }'
+  "$PMSET" -g | awk '/SleepDisabled/ { print $2 }'
 }
 
-apply() {
-  local count want have
-  count=$(find "$LOCKS" -type f | wc -l | tr -d ' ')
-  if [ "$count" -gt 0 ]; then want=1; else want=0; fi
-  have=$(current_state)
-  [ "$have" = "$want" ] && return
-  if sudo -n /usr/bin/pmset disablesleep "$want" 2>>"$LOG"; then
-    log "disablesleep $want (locks: $count)"
+set_sleep() {
+  # shellcheck disable=SC2086 # $SUDO is a command prefix and may be empty.
+  if $SUDO "$PMSET" disablesleep "$1" 2>>"$LOG"; then
+    log "disablesleep $1 ($2)"
   else
-    log "ERROR: sudo pmset disablesleep $want failed (is the sudoers entry installed?)"
+    log "ERROR: sudo pmset disablesleep $1 failed (is the sudoers entry installed?)"
+    return 1
+  fi
+}
+
+# Sync pmset with the locks. awake only undoes what it did itself: if sleep was
+# already disabled before the first lock (by you or another tool), it stays that way
+# after the last lock goes. $OWNED marks that awake is the one who disabled it.
+apply() {
+  local count have
+  count=$(find "$LOCKS" -type f | wc -l | tr -d ' ')
+  have=$(current_state)
+  if [ "$count" -gt 0 ]; then
+    [ "$have" = 1 ] && return
+    set_sleep 1 "locks: $count" && touch "$OWNED"
+  elif [ -f "$OWNED" ]; then
+    if [ "$have" = 1 ]; then
+      set_sleep 0 "no locks left" || return
+    fi
+    rm -f "$OWNED"
   fi
 }
 
@@ -114,6 +134,11 @@ cmd_status() {
   local f now
   now=$(date +%s)
   echo "SleepDisabled: $(current_state)"
+  if [ -f "$OWNED" ]; then
+    echo "Set by awake: yes (restored when the last lock goes)"
+  else
+    echo "Set by awake: no (left as is)"
+  fi
   echo "Locks:"
   for f in "$LOCKS"/*; do
     [ -f "$f" ] || { echo "  (none)"; break; }
@@ -151,7 +176,7 @@ usage: awake on [id] [pid]    hold a lock (default id: manual, never swept);
        awake off [id]         release a lock
        awake status           show sleep state and locks
        awake sweep            drop stale locks, then sync pmset (run by launchd)
-       awake reset            drop all locks and re-enable sleep
+       awake reset            drop all locks and restore the previous sleep state
        awake hook TOOL on|off agent hook entry point, reads hook JSON on stdin
 EOF
 }
