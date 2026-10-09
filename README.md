@@ -119,9 +119,16 @@ when you want to look or step in:
 awake status    # sleep state, whether awake set it, and the current locks
 awake on        # take a manual lock (never swept)
 awake off       # release the manual lock
+awake pause     # stop keeping the Mac awake until `awake resume`
+awake pause 2h  # ...or for a set time (30, 30m, 2h)
+awake resume    # end the pause
 awake reset     # drop all locks and restore the previous sleep state
 awake help      # all commands
 ```
+
+While paused, sleep behaves normally and awake restores it. Agent locks are still
+tracked, so `awake resume` (or the timer running out) disables sleep again right
+away if an agent is still working.
 
 `awake on` is handy for a long job you start yourself, like a render or a download.
 

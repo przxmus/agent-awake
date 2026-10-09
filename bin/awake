@@ -13,6 +13,7 @@ LOCKS="$AWAKE_HOME/locks"
 LOG="$AWAKE_HOME/awake.log"
 MUTEX="$AWAKE_HOME/.mutex"
 OWNED="$AWAKE_HOME/owned"
+PAUSED="$AWAKE_HOME/paused"
 # Overridable for tests; the sudoers rule must match the real pmset path.
 PMSET="${AWAKE_PMSET:-/usr/bin/pmset}"
 SUDO="${AWAKE_SUDO-sudo -n}"
@@ -72,12 +73,28 @@ set_sleep() {
   fi
 }
 
+# Paused while $PAUSED exists; its content is the epoch it ends at (0 = until resume).
+# An expired pause is removed here, so it ends on the next hook or sweep.
+is_paused() {
+  local until
+  [ -f "$PAUSED" ] || return 1
+  until=$(cat "$PAUSED" 2>/dev/null)
+  if [ "${until:-0}" -gt 0 ] && [ "$(date +%s)" -ge "$until" ]; then
+    rm -f "$PAUSED"
+    log "pause expired"
+    return 1
+  fi
+  return 0
+}
+
 # Sync pmset with the locks. awake only undoes what it did itself: if sleep was
 # already disabled before the first lock (by you or another tool), it stays that way
 # after the last lock goes. $OWNED marks that awake is the one who disabled it.
 apply() {
   local count have
   count=$(find "$LOCKS" -type f | wc -l | tr -d ' ')
+  # Locks keep being tracked while paused, but sleep is left alone.
+  is_paused && count=0
   have=$(current_state)
   if [ "$count" -gt 0 ]; then
     [ "$have" = 1 ] && return
@@ -130,10 +147,48 @@ cmd_sweep() {
   apply
 }
 
+# Parse "30", "30m", "2h" into minutes; prints nothing on bad input.
+parse_minutes() {
+  case "$1" in
+    *[!0-9mh]* | "" | m | h) return 1 ;;
+    *h) echo $((${1%h} * 60)) ;;
+    *m) echo "${1%m}" ;;
+    *) echo "$1" ;;
+  esac
+}
+
+cmd_pause() {
+  local mins until=0
+  if [ -n "${1:-}" ]; then
+    mins=$(parse_minutes "$1") || { echo "awake: bad duration '$1' (use e.g. 30, 30m, 2h)" >&2; exit 1; }
+    until=$(($(date +%s) + mins * 60))
+  fi
+  lock_mutex
+  echo "$until" >"$PAUSED"
+  log "pause (${1:-until resume})"
+  apply
+  if [ "$until" -gt 0 ]; then echo "paused for $1"; else echo "paused until 'awake resume'"; fi
+}
+
+cmd_resume() {
+  lock_mutex
+  rm -f "$PAUSED"
+  log "resume"
+  apply
+  echo "resumed"
+}
+
 cmd_status() {
   local f now
   now=$(date +%s)
   echo "SleepDisabled: $(current_state)"
+  if is_paused; then
+    if [ "$(cat "$PAUSED")" -gt 0 ]; then
+      echo "Paused: yes, $((($(cat "$PAUSED") - now + 59) / 60))m left (awake resume to end)"
+    else
+      echo "Paused: yes (awake resume to end)"
+    fi
+  fi
   if [ -f "$OWNED" ]; then
     echo "Set by awake: yes (restored when the last lock goes)"
   else
@@ -199,6 +254,9 @@ usage: awake status           show sleep state and locks
        awake on [id] [pid]    hold a lock (default id: manual, never swept);
                               with a pid, the lock dies with that process
        awake off [id]         release a lock
+       awake pause [30m|2h]   stop keeping the Mac awake (locks are still tracked);
+                              without a duration, until 'awake resume'
+       awake resume           end the pause
        awake reset            drop all locks and restore the previous sleep state
        awake update           pull the latest version and reinstall
        awake uninstall        remove hooks, launchd job and the awake command
@@ -213,6 +271,8 @@ case "${1:-}" in
   off) cmd_off "${2:-}" ;;
   sweep) cmd_sweep ;;
   status) cmd_status ;;
+  pause) cmd_pause "${2:-}" ;;
+  resume) cmd_resume ;;
   reset) cmd_reset ;;
   update) cmd_update ;;
   uninstall) exec "$(repo_root)/uninstall.sh" ;;

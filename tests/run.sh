@@ -52,6 +52,22 @@ check "on disables sleep" 1 "$(sleep_state)"
 "$AWAKE" off a
 check "last off re-enables sleep" 0 "$(sleep_state)"
 
+setup pause 0
+"$AWAKE" on a
+"$AWAKE" pause >/dev/null
+check "pause restores sleep" 0 "$(sleep_state)"
+"$AWAKE" on b
+check "lock while paused keeps sleep enabled" 0 "$(sleep_state)"
+check "locks tracked while paused" 2 "$(lock_count)"
+"$AWAKE" resume >/dev/null
+check "resume disables sleep again" 1 "$(sleep_state)"
+"$AWAKE" pause 1m >/dev/null
+echo $(($(date +%s) - 1)) >"$AWAKE_HOME/paused"
+"$AWAKE" sweep
+check "expired pause ends on sweep" 1 "$(sleep_state)"
+"$AWAKE" pause bogus 2>/dev/null
+check "bad duration rejected" 1 "$(sleep_state)"
+
 setup multi 0
 "$AWAKE" on a
 "$AWAKE" on b
