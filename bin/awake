@@ -1,0 +1,167 @@
+#!/bin/bash
+# awake: keep the Mac awake (lid closed too) while any AI agent session is working.
+#
+# Every working session holds a lock file in $AWAKE_HOME/locks. While at least one
+# lock exists, `pmset disablesleep 1` is set; when the last one goes away, sleep is
+# re-enabled. Locks of dead agent processes or without a heartbeat for
+# AWAKE_TTL_MIN minutes are swept (run `awake sweep` from launchd every minute).
+
+set -u
+
+AWAKE_HOME="${AWAKE_HOME:-$HOME/.agent-awake}"
+LOCKS="$AWAKE_HOME/locks"
+LOG="$AWAKE_HOME/awake.log"
+MUTEX="$AWAKE_HOME/.mutex"
+AWAKE_TTL_MIN=45
+[ -f "$AWAKE_HOME/config" ] && . "$AWAKE_HOME/config"
+
+mkdir -p "$LOCKS"
+
+log() {
+  printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$LOG"
+}
+
+lock_mutex() {
+  local i=0
+  until mkdir "$MUTEX" 2>/dev/null; do
+    i=$((i + 1))
+    # A holder that died mid-run leaves the mutex behind; steal it after ~5s.
+    if [ "$i" -ge 50 ]; then
+      rm -rf "$MUTEX"
+      i=0
+    fi
+    sleep 0.1
+  done
+  trap 'rmdir "$MUTEX" 2>/dev/null' EXIT
+}
+
+# Safe as a file name: letters, digits, dot, dash, underscore.
+sanitize() {
+  printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'
+}
+
+# Walk up the process tree to the agent binary (claude / codex) that ran this hook.
+agent_pid() {
+  local pid=$PPID comm ppid
+  while [ "$pid" -gt 1 ]; do
+    read -r ppid comm < <(ps -o ppid= -o comm= -p "$pid" 2>/dev/null) || break
+    case "$(basename "$comm" | tr 'A-Z' 'a-z')" in
+      claude* | codex*) echo "$pid"; return ;;
+    esac
+    pid=$ppid
+  done
+  echo 0
+}
+
+current_state() {
+  pmset -g | awk '/SleepDisabled/ { print $2 }'
+}
+
+apply() {
+  local count want have
+  count=$(find "$LOCKS" -type f | wc -l | tr -d ' ')
+  if [ "$count" -gt 0 ]; then want=1; else want=0; fi
+  have=$(current_state)
+  [ "$have" = "$want" ] && return
+  if sudo -n /usr/bin/pmset disablesleep "$want" 2>>"$LOG"; then
+    log "disablesleep $want (locks: $count)"
+  else
+    log "ERROR: sudo pmset disablesleep $want failed (is the sudoers entry installed?)"
+  fi
+}
+
+cmd_on() {
+  local id pid
+  id=$(sanitize "${1:-manual}")
+  pid="${2:-0}"
+  lock_mutex
+  [ -f "$LOCKS/$id" ] || log "on  $id (pid $pid)"
+  printf 'pid=%s\nsince=%s\n' "$pid" "$(date +%s)" >"$LOCKS/$id"
+  apply
+}
+
+cmd_off() {
+  local id
+  id=$(sanitize "${1:-manual}")
+  lock_mutex
+  [ -f "$LOCKS/$id" ] && log "off $id"
+  rm -f "$LOCKS/$id"
+  apply
+}
+
+cmd_sweep() {
+  local f id pid now mtime
+  now=$(date +%s)
+  lock_mutex
+  for f in "$LOCKS"/*; do
+    [ -f "$f" ] || continue
+    id=$(basename "$f")
+    [ "$id" = manual ] && continue
+    pid=$(sed -n 's/^pid=//p' "$f")
+    mtime=$(stat -f %m "$f")
+    if [ "${pid:-0}" -gt 0 ] && ! ps -p "$pid" >/dev/null 2>&1; then
+      log "sweep $id (process $pid is gone)"
+      rm -f "$f"
+    elif [ $((now - mtime)) -gt $((AWAKE_TTL_MIN * 60)) ]; then
+      log "sweep $id (no heartbeat for ${AWAKE_TTL_MIN}m)"
+      rm -f "$f"
+    fi
+  done
+  apply
+}
+
+cmd_status() {
+  local f now
+  now=$(date +%s)
+  echo "SleepDisabled: $(current_state)"
+  echo "Locks:"
+  for f in "$LOCKS"/*; do
+    [ -f "$f" ] || { echo "  (none)"; break; }
+    printf '  %s  pid=%s  last beat %ss ago\n' "$(basename "$f")" \
+      "$(sed -n 's/^pid=//p' "$f")" $((now - $(stat -f %m "$f")))
+  done
+}
+
+cmd_reset() {
+  lock_mutex
+  rm -f "$LOCKS"/*
+  log "reset"
+  apply
+}
+
+# Hook entry point: `awake hook <claude|codex> <on|off>`, hook JSON on stdin.
+# Never prints and always exits 0, so it can't block or break the agent.
+cmd_hook() {
+  local tool action input sid
+  tool=$1
+  action=$2
+  input=$(cat)
+  sid=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+  [ -n "$sid" ] || sid=unknown
+  case "$action" in
+    on) cmd_on "$tool-$sid" "$(agent_pid)" ;;
+    off) cmd_off "$tool-$sid" ;;
+  esac
+}
+
+usage() {
+  cat <<EOF
+usage: awake on [id] [pid]    hold a lock (default id: manual, never swept);
+                              with a pid, the lock dies with that process
+       awake off [id]         release a lock
+       awake status           show sleep state and locks
+       awake sweep            drop stale locks, then sync pmset (run by launchd)
+       awake reset            drop all locks and re-enable sleep
+       awake hook TOOL on|off agent hook entry point, reads hook JSON on stdin
+EOF
+}
+
+case "${1:-}" in
+  on) cmd_on "${2:-}" "${3:-0}" ;;
+  off) cmd_off "${2:-}" ;;
+  sweep) cmd_sweep ;;
+  status) cmd_status ;;
+  reset) cmd_reset ;;
+  hook) cmd_hook "${2:-}" "${3:-}" >/dev/null 2>&1; exit 0 ;;
+  *) usage; exit 1 ;;
+esac
