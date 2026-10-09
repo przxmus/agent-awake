@@ -6,6 +6,8 @@ All notable changes are listed here. The format follows
 
 ## Unreleased
 
+## 0.1.1
+
 - `awake pause [duration]` and `awake resume` to temporarily stop keeping the Mac awake
 
 ## 0.1.0
