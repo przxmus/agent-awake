@@ -51,17 +51,24 @@ sudoers rule (see below).
 ## Install
 
 ```bash
-git clone https://github.com/przxmus/agent-awake.git ~/agent-awake
-cd ~/agent-awake
+curl -fsSL https://raw.githubusercontent.com/przxmus/agent-awake/main/install.sh | bash
+```
+
+This clones the repo to `~/.local/share/agent-awake` and runs `install.sh` from
+there. Want to read the script first? Clone the repo yourself and run the installer
+from your clone. The hooks then point into that clone, so run `./install.sh` again if
+you move it.
+
+```bash
+git clone https://github.com/przxmus/agent-awake.git
+cd agent-awake
 ./install.sh
 ```
 
-The hooks point to the absolute path of the clone. If you move the repo, run
-`./install.sh` again.
-
 The installer is safe to run again and does the following:
 
-1. Links `~/.local/bin/awake` to `bin/awake`.
+1. Links `~/.local/bin/awake` to `bin/awake`. Make sure `~/.local/bin` is on your
+   `PATH`.
 2. Installs `/etc/sudoers.d/agent-awake` if `sudo pmset disablesleep` still asks for
    a password. sudo asks for your password once here.
 3. Installs and starts the launchd job `local.agent-awake`.
@@ -113,6 +120,7 @@ awake status    # sleep state, whether awake set it, and the current locks
 awake on        # take a manual lock (never swept)
 awake off       # release the manual lock
 awake reset     # drop all locks and restore the previous sleep state
+awake help      # all commands
 ```
 
 `awake on` is handy for a long job you start yourself, like a render or a download.
@@ -128,15 +136,25 @@ Settings go in `~/.agent-awake/config`, a shell file:
 AWAKE_TTL_MIN=90
 ```
 
+## Update
+
+```bash
+awake update
+```
+
+This pulls the latest version with `git pull --ff-only` and runs the installer
+again. `awake version` shows what you have.
+
 ## Uninstall
 
 ```bash
-./uninstall.sh
+awake uninstall
 ```
 
 This removes the hooks, the launchd job and the `awake` link, then restores the
-sleep state awake changed. It keeps the sudoers rule and prints the command to
-remove it.
+sleep state awake changed. It also deletes `~/.local/share/agent-awake` if the curl
+installer created it. A clone you made yourself stays. The sudoers rule stays too,
+and the command prints how to remove it.
 
 ## Limitations
 
