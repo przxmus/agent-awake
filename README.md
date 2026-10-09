@@ -30,7 +30,10 @@ w `~/.claude/settings.json` oraz `~/.codex/hooks.json`.
 
 Potem:
 - uruchom ponownie otwarte sesje Claude Code i Codexa,
-- w Codex CLI wpisz raz `/hooks` i zatwierdź nowe hooki (bez tego Codex ich nie uruchomi).
+- w Codex CLI wpisz raz `/hooks` i zatwierdź nowe hooki (bez tego Codex ich nie uruchomi),
+- zamknij aplikację ChatGPT/Codex przez Cmd+Q i otwórz ją ponownie. Jej wbudowany
+  `codex app-server` korzysta z tego samego `~/.codex`, ale musi wystartować na nowo,
+  żeby wczytać hooki.
 
 Odinstalowanie: `./uninstall.sh` (wpis sudoers zostaje).
 
