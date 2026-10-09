@@ -23,3 +23,8 @@ Uninstalled. State and logs are kept in ~/.agent-awake (safe to delete).
 To also remove the passwordless pmset rule:
   sudo rm /etc/sudoers.d/agent-awake
 EOF
+
+# Drop the checkout only if the curl installer created it; a clone you made is yours.
+if [ "$ROOT" = "${AGENT_AWAKE_DIR:-$HOME/.local/share/agent-awake}" ]; then
+  rm -rf "$ROOT"
+fi

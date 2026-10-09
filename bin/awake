@@ -169,14 +169,41 @@ cmd_hook() {
   esac
 }
 
+# The repo checkout this script lives in (bin/awake is usually reached via a symlink).
+repo_root() {
+  local self
+  self=$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")
+  cd "$(dirname "$self")/.." && pwd
+}
+
+cmd_version() {
+  local root sha
+  root=$(repo_root)
+  sha=$(git -C "$root" rev-parse --short HEAD 2>/dev/null || true)
+  echo "agent-awake $(cat "$root/VERSION")${sha:+ ($sha)}"
+}
+
+cmd_update() {
+  local root
+  root=$(repo_root)
+  if ! git -C "$root" pull --ff-only; then
+    echo "awake: update failed; commit or stash local changes in $root and retry" >&2
+    exit 1
+  fi
+  exec "$root/install.sh"
+}
+
 usage() {
   cat <<EOF
-usage: awake on [id] [pid]    hold a lock (default id: manual, never swept);
+usage: awake status           show sleep state and locks
+       awake on [id] [pid]    hold a lock (default id: manual, never swept);
                               with a pid, the lock dies with that process
        awake off [id]         release a lock
-       awake status           show sleep state and locks
-       awake sweep            drop stale locks, then sync pmset (run by launchd)
        awake reset            drop all locks and restore the previous sleep state
+       awake update           pull the latest version and reinstall
+       awake uninstall        remove hooks, launchd job and the awake command
+       awake version          print the installed version
+       awake sweep            drop stale locks, then sync pmset (run by launchd)
        awake hook TOOL on|off agent hook entry point, reads hook JSON on stdin
 EOF
 }
@@ -187,6 +214,10 @@ case "${1:-}" in
   sweep) cmd_sweep ;;
   status) cmd_status ;;
   reset) cmd_reset ;;
+  update) cmd_update ;;
+  uninstall) exec "$(repo_root)/uninstall.sh" ;;
+  version | --version | -v) cmd_version ;;
+  help | --help | -h) usage ;;
   hook) cmd_hook "${2:-}" "${3:-}" >/dev/null 2>&1; exit 0 ;;
   *) usage; exit 1 ;;
 esac

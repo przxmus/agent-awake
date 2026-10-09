@@ -1,20 +1,44 @@
 #!/bin/bash
 # Install agent-awake: CLI symlink, passwordless pmset, launchd sweeper, agent hooks.
 # Safe to run again (after an update or after moving the repo).
+#
+# Run it from a clone, or straight from GitHub:
+#   curl -fsSL https://raw.githubusercontent.com/przxmus/agent-awake/main/install.sh | bash
 set -euo pipefail
-
-ROOT="$(cd "$(dirname "$0")" && pwd)"
-BIN="$ROOT/bin/awake"
-LABEL="local.agent-awake"
-PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-SUDOERS="/etc/sudoers.d/agent-awake"
 
 if [ "$(uname -s)" != Darwin ]; then
   echo "agent-awake only supports macOS." >&2
   exit 1
 fi
 
+SOURCE="${BASH_SOURCE[0]:-}"
+if [ -z "$SOURCE" ] || [ ! -f "$(dirname "$SOURCE")/bin/awake" ]; then
+  # Not inside a checkout (piped from curl): fetch the repo, then run its installer.
+  REPO="${AGENT_AWAKE_REPO:-https://github.com/przxmus/agent-awake.git}"
+  DIR="${AGENT_AWAKE_DIR:-$HOME/.local/share/agent-awake}"
+  if ! command -v git >/dev/null; then
+    echo "git is required. Install it with: xcode-select --install" >&2
+    exit 1
+  fi
+  if [ -d "$DIR/.git" ]; then
+    echo "==> Updating $DIR"
+    git -C "$DIR" pull --ff-only --quiet
+  else
+    echo "==> Downloading agent-awake to $DIR"
+    mkdir -p "$(dirname "$DIR")"
+    git clone --quiet --depth 1 "$REPO" "$DIR"
+  fi
+  exec "$DIR/install.sh"
+fi
+
+ROOT="$(cd "$(dirname "$SOURCE")" && pwd)"
+BIN="$ROOT/bin/awake"
+LABEL="local.agent-awake"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+SUDOERS="/etc/sudoers.d/agent-awake"
+
 chmod +x "$BIN"
+echo "==> Installing $("$BIN" version) from $ROOT"
 
 echo "==> CLI: ~/.local/bin/awake"
 mkdir -p "$HOME/.local/bin"
@@ -79,4 +103,6 @@ Done. Next steps:
   2. Codex: run /hooks in Codex CLI once and trust the new hooks,
      then quit (Cmd+Q) and reopen the Codex / ChatGPT app.
   3. Check it works: start a prompt and run 'awake status'.
+
+Update later with 'awake update', remove with 'awake uninstall'.
 EOF
