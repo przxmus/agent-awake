@@ -1,62 +1,179 @@
 # agent-awake
 
-Mac nie zasypia (także z zamkniętą klapą), dopóki **którykolwiek** agent AI pracuje.
-Gdy skończą wszystkie, uśpienie wraca.
+Keep your Mac awake while AI coding agents work, even with the lid closed in a
+backpack. Once every agent is done and waiting for you, sleep comes back on so the
+laptop doesn't cook itself.
 
-## Jak to działa
+It works across several agents at once. Run three Claude Code sessions and two Codex
+threads, and sleep stays disabled until the last one finishes.
 
-- Każda pracująca sesja trzyma plik blokady w `~/.agent-awake/locks/`.
-- Jest co najmniej jedna blokada → `pmset disablesleep 1`. Zero blokad → `pmset disablesleep 0`.
-- Hooki zakładają i zdejmują blokady automatycznie:
+Supported agents:
 
-| Narzędzie | Blokada (heartbeat) | Zwolnienie |
+- Claude Code (CLI, and the Code tab in the Claude desktop app)
+- Codex (CLI, and the Codex / ChatGPT desktop app)
+
+macOS only.
+
+## How it works
+
+Each working agent session holds a lock file in `~/.agent-awake/locks/`. Agent hooks
+create and remove the locks:
+
+| Agent | Takes the lock (heartbeat) | Releases the lock |
 |---|---|---|
-| Claude Code (CLI i zakładka Code w Claude Desktop) | `UserPromptSubmit`, `PreToolUse` | `Stop`, `SessionEnd` |
-| Codex (CLI i aplikacja) | `UserPromptSubmit`, `PreToolUse` | `Stop`, `Interrupt`, `SessionEnd` |
+| Claude Code | `UserPromptSubmit`, `PreToolUse` | `Stop`, `SessionEnd` |
+| Codex | `UserPromptSubmit`, `PreToolUse` | `Stop`, `Interrupt`, `SessionEnd` |
 
-- launchd co minutę uruchamia `awake sweep`, który usuwa blokady:
-  - procesów agenta, które już nie żyją (crash, zamknięte okno),
-  - bez heartbeatu od `AWAKE_TTL_MIN` minut (domyślnie 45).
+After every change, `awake` counts the locks:
 
-## Instalacja
+- One or more locks: it runs `pmset disablesleep 1`.
+- No locks left: it runs `pmset disablesleep 0`, but only if awake disabled sleep
+  itself. If sleep was already disabled before the first lock (by you or another
+  tool), awake leaves it alone.
+
+A launchd job runs `awake sweep` every minute. It drops locks whose agent process
+has exited (crash, closed window) and locks with no heartbeat for 45 minutes, so a
+crashed session can't keep your laptop awake forever.
+
+### Why `pmset disablesleep` and not `caffeinate`
+
+`caffeinate` keeps the Mac awake while the lid is open. Close the lid and the Mac
+sleeps anyway. `pmset disablesleep 1` also prevents lid-close sleep, which is the
+whole point here. The catch is that it needs root, so the installer adds a narrow
+sudoers rule (see below).
+
+## Requirements
+
+- macOS (tested on macOS 26)
+- Claude Code and/or Codex with hooks support (Codex CLI 0.160 or newer)
+- An admin account, to install the sudoers rule once
+
+## Install
 
 ```bash
+git clone https://github.com/przxmus/agent-awake.git ~/agent-awake
+cd ~/agent-awake
 ./install.sh
 ```
 
-Instalator jest idempotentny. Robi symlink `~/.local/bin/awake`, wpis sudoers dla
-`pmset disablesleep` bez hasła (jeśli go jeszcze nie ma), usługę launchd i hooki
-w `~/.claude/settings.json` oraz `~/.codex/hooks.json`.
+The hooks point to the absolute path of the clone. If you move the repo, run
+`./install.sh` again.
 
-Potem:
-- uruchom ponownie otwarte sesje Claude Code i Codexa,
-- w Codex CLI wpisz raz `/hooks` i zatwierdź nowe hooki (bez tego Codex ich nie uruchomi),
-- zamknij aplikację ChatGPT/Codex przez Cmd+Q i otwórz ją ponownie. Jej wbudowany
-  `codex app-server` korzysta z tego samego `~/.codex`, ale musi wystartować na nowo,
-  żeby wczytać hooki.
+The installer is safe to run again and does the following:
 
-Odinstalowanie: `./uninstall.sh` (wpis sudoers zostaje).
+1. Links `~/.local/bin/awake` to `bin/awake`.
+2. Installs `/etc/sudoers.d/agent-awake` if `sudo pmset disablesleep` still asks for
+   a password. sudo asks for your password once here.
+3. Installs and starts the launchd job `local.agent-awake`.
+4. Adds hooks to `~/.claude/settings.json` and `~/.codex/hooks.json`, keeping your
+   other settings and hooks. It skips an agent that isn't installed.
 
-## Użycie ręczne
+Then finish the setup by hand:
 
-```bash
-awake status      # stan uśpienia i lista blokad
-awake on          # ręczna blokada "manual", sweep jej nie usuwa
-awake off         # zdjęcie ręcznej blokady
-awake reset       # usuń wszystkie blokady i włącz uśpienie
+1. Restart running Claude Code sessions.
+2. In Codex CLI, run `/hooks` once and trust the new hooks. Codex ignores untrusted
+   hooks. The Codex desktop app reads the same `~/.codex`, so this covers it too.
+3. Quit the Codex / ChatGPT app with Cmd+Q and open it again, so its built-in
+   `codex app-server` loads the hooks.
+4. Send a prompt to any agent and run `awake status` while it works. You should see
+   a `claude-...` or `codex-...` lock.
+
+### The sudoers rule
+
+`pmset disablesleep` needs root, and hooks can't type a password. The installer
+writes this rule (with your username):
+
+```
+you ALL=(root) NOPASSWD: /usr/bin/pmset disablesleep 0, /usr/bin/pmset disablesleep 1
 ```
 
-Nie ustawiaj `sudo pmset disablesleep 1` ręcznie: sweep po minucie przywróci uśpienie,
-jeśli nie ma blokad. Użyj zamiast tego `awake on`.
+It allows exactly these two commands without a password. No other `pmset` option and
+no other program. The installer checks the file with `visudo -c` before installing
+it, so a broken rule can't lock you out of sudo.
 
-Log: `~/.agent-awake/awake.log`. Własne TTL: `echo AWAKE_TTL_MIN=90 > ~/.agent-awake/config`.
+To add it by hand instead:
 
-## Ograniczenia
+```bash
+sudo visudo -f /etc/sudoers.d/agent-awake
+```
 
-- **Claude Desktop (zwykły czat)** nie ma hooków ani shella, więc nie jest objęty.
-- **Przerwanie Esc w Claude Code** może nie wywołać `Stop`. Blokada zostaje wtedy do
-  zamknięcia sesji albo do wygaśnięcia TTL.
-- **Jedno polecenie dłuższe niż TTL** (np. build trwający godzinę, bez innych wywołań
-  narzędzi) traci blokadę. Jeśli tak pracujesz, zwiększ `AWAKE_TTL_MIN`.
-- **Zadania w tle po `Stop`**: gdy agent skończy turę, a w tle coś jeszcze działa,
-  blokada jest zdejmowana. Wraca, gdy agent znów zacznie używać narzędzi.
+Paste the line above with your username (`whoami`), save, and quit. Check it with:
+
+```bash
+sudo -n /usr/bin/pmset disablesleep 0 && echo ok
+```
+
+## Usage
+
+You don't need to do anything day to day. The hooks handle it. A few commands help
+when you want to look or step in:
+
+```bash
+awake status    # sleep state, whether awake set it, and the current locks
+awake on        # take a manual lock (never swept)
+awake off       # release the manual lock
+awake reset     # drop all locks and restore the previous sleep state
+```
+
+`awake on` is handy for a long job you start yourself, like a render or a download.
+
+The log is in `~/.agent-awake/awake.log`.
+
+## Configuration
+
+Settings go in `~/.agent-awake/config`, a shell file:
+
+```bash
+# Minutes without a heartbeat before a lock is dropped (default 45).
+AWAKE_TTL_MIN=90
+```
+
+## Uninstall
+
+```bash
+./uninstall.sh
+```
+
+This removes the hooks, the launchd job and the `awake` link, then restores the
+sleep state awake changed. It keeps the sudoers rule and prints the command to
+remove it.
+
+## Limitations
+
+- The plain chat in the Claude desktop app has no hooks or shell, so it isn't
+  covered. The Code tab is.
+- Interrupting Claude Code with Esc may not fire `Stop`. The lock then stays until
+  the session closes or the TTL runs out.
+- One tool call that runs longer than the TTL (an hour-long build with no other tool
+  calls) loses its lock. Raise `AWAKE_TTL_MIN` if you work like that.
+- If an agent ends its turn while a background task still runs, the lock goes away.
+  It comes back as soon as the agent uses a tool again.
+- If you disable sleep by hand while awake already holds it disabled, awake can't
+  tell, and turns sleep back on after the last lock. Run `awake on` instead.
+
+## Troubleshooting
+
+**No locks appear.** Check `~/.agent-awake/awake.log`. With nothing logged, the
+hooks aren't running. Restart the agent, and for Codex make sure you trusted the
+hooks with `/hooks`.
+
+**`ERROR: sudo pmset disablesleep ... failed` in the log.** The sudoers rule is
+missing or doesn't match. Run the `sudo -n` check above.
+
+**Sleep stays disabled.** Run `awake status`. If it lists no locks and says
+"Set by awake: no", sleep was disabled outside awake. Run
+`sudo pmset disablesleep 0` to turn it back on.
+
+## Development
+
+```bash
+tests/run.sh                              # tests, with a fake pmset
+shellcheck bin/awake install.sh uninstall.sh tests/run.sh
+```
+
+The tests never touch your real sleep setting. See [CONTRIBUTING.md](CONTRIBUTING.md)
+before opening a pull request.
+
+## License
+
+[MIT](LICENSE)
