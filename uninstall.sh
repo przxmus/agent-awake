@@ -1,13 +1,16 @@
 #!/bin/bash
-# Remove agent-awake hooks, launchd sweeper and CLI symlink, then re-enable sleep.
-# The sudoers entry is left in place; remove /etc/sudoers.d/pmset-sleep by hand if unused.
+# Remove agent-awake hooks, launchd sweeper and CLI symlink, and restore the sleep
+# state from before awake disabled it. The sudoers entry is kept; the script prints
+# how to remove it.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 LABEL="local.agent-awake"
 
-osascript -l JavaScript "$ROOT/scripts/hooks.js" remove claude "$HOME/.claude/settings.json" ""
-[ -f "$HOME/.codex/hooks.json" ] && osascript -l JavaScript "$ROOT/scripts/hooks.js" remove codex "$HOME/.codex/hooks.json" ""
+[ -f "$HOME/.claude/settings.json" ] &&
+  osascript -l JavaScript "$ROOT/scripts/hooks.js" remove claude "$HOME/.claude/settings.json" ""
+[ -f "$HOME/.codex/hooks.json" ] &&
+  osascript -l JavaScript "$ROOT/scripts/hooks.js" remove codex "$HOME/.codex/hooks.json" ""
 
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"
@@ -15,4 +18,8 @@ rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"
 "$ROOT/bin/awake" reset
 rm -f "$HOME/.local/bin/awake"
 
-echo "Uninstalled. Sleep is enabled again."
+cat <<EOF
+Uninstalled. State and logs are kept in ~/.agent-awake (safe to delete).
+To also remove the passwordless pmset rule:
+  sudo rm /etc/sudoers.d/agent-awake
+EOF
