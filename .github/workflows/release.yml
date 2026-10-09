@@ -140,7 +140,7 @@ jobs:
         run: |
           range=${PREV_TAG:+$PREV_TAG..}HEAD
           git log "$range" --no-merges --format='%h%x09%s' |
-            grep -v -P '\tchore: release v' > commits.tsv || true
+            awk -F'\t' '$2 !~ /^chore: release v/' > commits.tsv
 
           section() { # title, extended regex matched against the subject
             local out
