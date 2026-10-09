@@ -64,13 +64,12 @@ updating (for example, reinstall or re-trust hooks).
 
 ## Releases (maintainers)
 
-Releases are cut from the **Release** workflow (Actions → Release → Run workflow on `main`).
+`main` only accepts pull requests, so a release has two steps.
 
-1. Pick `patch`, `minor` or `major` to bump the latest `vX.Y.Z` tag, or `custom` and fill in `custom_version`.
-2. The workflow runs shellcheck and the tests, moves the `Unreleased` entries in `CHANGELOG.md` under the new version, bumps `VERSION`, commits `chore: release vX.Y.Z`, tags it and pushes to `main`.
-3. The GitHub release notes are generated from the commits since the previous tag, grouped by conventional commit type.
+1. Actions → Release → Run workflow on `main`. Pick `patch`, `minor` or `major` to bump the latest `vX.Y.Z` tag, or `custom` and fill in `custom_version`. The workflow opens a `chore: release vX.Y.Z` PR that bumps `VERSION` and moves the `Unreleased` entries in `CHANGELOG.md` under the new version, and runs CI on it.
+2. Merge that PR. The merge tags `vX.Y.Z` and publishes the GitHub release, with notes generated from the commits since the previous tag, grouped by conventional commit type.
 
-If `main` is protected, allow `github-actions[bot]` to push to it.
+In Settings → Actions → General, enable "Allow GitHub Actions to create and approve pull requests".
 
 Users get the release through `awake update`, which pulls `main`.
 
