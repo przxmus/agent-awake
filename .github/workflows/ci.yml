@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: command -v shellcheck || brew install shellcheck
+
+      - name: shellcheck
+        run: shellcheck bin/awake install.sh uninstall.sh tests/run.sh
+
+      - name: Tests
+        run: tests/run.sh
