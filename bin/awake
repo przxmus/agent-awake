@@ -108,12 +108,13 @@ apply() {
 }
 
 cmd_on() {
-  local id pid
+  local id pid transcript
   id=$(sanitize "${1:-manual}")
   pid="${2:-0}"
+  transcript="${3:-}"
   lock_mutex
   [ -f "$LOCKS/$id" ] || log "on  $id (pid $pid)"
-  printf 'pid=%s\nsince=%s\n' "$pid" "$(date +%s)" >"$LOCKS/$id"
+  printf 'pid=%s\nsince=%s\ntranscript=%s\n' "$pid" "$(date +%s)" "$transcript" >"$LOCKS/$id"
   apply
 }
 
@@ -126,8 +127,24 @@ cmd_off() {
   apply
 }
 
+# Codex has no hook for a turn that a network or API error ends, but its session log
+# records the end of every turn. True if the last turn there ended after the
+# heartbeat at epoch $2, so an older turn's end can't drop the lock of a new one.
+turn_ended() {
+  local last ts
+  [ -f "$1" ] || return 1
+  last=$(grep -E '"payload":\{"type":"(task_started|task_complete|turn_aborted)"' "$1" | tail -n 1)
+  case "$last" in
+    *'"payload":{"type":"task_complete"'* | *'"payload":{"type":"turn_aborted"'*) ;;
+    *) return 1 ;;
+  esac
+  ts=$(printf '%s' "$last" | sed -n 's/^{"timestamp":"\([^".Z]*\).*/\1/p')
+  ts=$(date -j -u -f '%Y-%m-%dT%H:%M:%S' "$ts" +%s 2>/dev/null) || return 1
+  [ "$ts" -ge "$2" ]
+}
+
 cmd_sweep() {
-  local f id pid now mtime
+  local f id pid now mtime transcript
   now=$(date +%s)
   lock_mutex
   for f in "$LOCKS"/*; do
@@ -136,8 +153,12 @@ cmd_sweep() {
     [ "$id" = manual ] && continue
     pid=$(sed -n 's/^pid=//p' "$f")
     mtime=$(stat -f %m "$f")
+    transcript=$(sed -n 's/^transcript=//p' "$f")
     if [ "${pid:-0}" -gt 0 ] && ! ps -p "$pid" >/dev/null 2>&1; then
       log "sweep $id (process $pid is gone)"
+      rm -f "$f"
+    elif [ -n "$transcript" ] && turn_ended "$transcript" "$mtime"; then
+      log "sweep $id (turn ended without a stop hook)"
       rm -f "$f"
     elif [ $((now - mtime)) -gt $((AWAKE_TTL_MIN * 60)) ]; then
       log "sweep $id (no heartbeat for ${AWAKE_TTL_MIN}m)"
@@ -212,14 +233,15 @@ cmd_reset() {
 # Hook entry point: `awake hook <claude|codex> <on|off>`, hook JSON on stdin.
 # Never prints and always exits 0, so it can't block or break the agent.
 cmd_hook() {
-  local tool action input sid
+  local tool action input sid transcript
   tool=$1
   action=$2
   input=$(cat)
   sid=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
   [ -n "$sid" ] || sid=unknown
+  transcript=$(printf '%s' "$input" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
   case "$action" in
-    on) cmd_on "$tool-$sid" "$(agent_pid)" ;;
+    on) cmd_on "$tool-$sid" "$(agent_pid)" "$transcript" ;;
     off) cmd_off "$tool-$sid" ;;
   esac
 }

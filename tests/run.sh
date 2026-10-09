@@ -109,6 +109,35 @@ touch -t 202001010000 "$AWAKE_HOME/locks/old" "$AWAKE_HOME/locks/manual"
 check "sweep drops locks without a heartbeat" 0 "$([ -f "$AWAKE_HOME/locks/old" ] && echo 1 || echo 0)"
 check "sweep never drops the manual lock" 1 "$([ -f "$AWAKE_HOME/locks/manual" ] && echo 1 || echo 0)"
 
+# Codex session log line, like ~/.codex/sessions/.../rollout-*.jsonl.
+rollout_event() {
+  printf '{"timestamp":"%s","ordinal":1,"type":"event_msg","payload":{"type":"%s","turn_id":"t"}}\n' \
+    "$(date -u -r "$1" '+%Y-%m-%dT%H:%M:%S.123Z')" "$2"
+}
+
+setup sweep-turn-ended 0
+log="$WORK/rollout.jsonl"
+now=$(date +%s)
+rollout_event $((now - 60)) task_complete >"$log"
+rollout_event "$now" task_started >>"$log"
+printf '{"session_id":"s-2","transcript_path":"%s"}' "$log" | "$AWAKE" hook codex on
+"$AWAKE" sweep
+check "sweep keeps the lock of a running turn" 1 "$(lock_count)"
+: >"$log"
+rollout_event $((now - 60)) task_complete >"$log"
+"$AWAKE" sweep
+check "sweep ignores a turn that ended before the heartbeat" 1 "$(lock_count)"
+rollout_event $((now + 1)) task_complete >>"$log"
+"$AWAKE" sweep
+check "sweep drops the lock of a turn that ended with an error" 0 "$(lock_count)"
+check "sweep restores sleep after a failed turn" 0 "$(sleep_state)"
+
+setup sweep-turn-aborted 0
+rollout_event $(($(date +%s) + 1)) turn_aborted >"$log"
+printf '{"session_id":"s-3","transcript_path":"%s"}' "$log" | "$AWAKE" hook codex on
+"$AWAKE" sweep
+check "sweep drops the lock of an aborted turn" 0 "$(lock_count)"
+
 setup hook 0
 out=$(echo '{"session_id": "s-1", "hook_event_name": "UserPromptSubmit"}' | "$AWAKE" hook claude on)
 check "hook prints nothing" "" "$out"
@@ -146,7 +175,7 @@ cfg="$WORK/settings.json"
 echo '{"theme":"dark","hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo keep"}]}]}}' >"$cfg"
 osascript -l JavaScript "$ROOT/scripts/hooks.js" add claude "$cfg" "$AWAKE"
 osascript -l JavaScript "$ROOT/scripts/hooks.js" add claude "$cfg" "$AWAKE"
-check "hooks add is idempotent" 4 "$(grep -c 'hook claude' "$cfg")"
+check "hooks add is idempotent" 5 "$(grep -c 'hook claude' "$cfg")"
 check "hooks add keeps foreign hooks" 1 "$(grep -c 'echo keep' "$cfg")"
 osascript -l JavaScript "$ROOT/scripts/hooks.js" remove claude "$cfg" ""
 check "hooks remove drops only ours" 0 "$(grep -c 'hook claude' "$cfg")"

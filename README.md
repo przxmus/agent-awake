@@ -21,8 +21,12 @@ create and remove the locks:
 
 | Agent | Takes the lock (heartbeat) | Releases the lock |
 |---|---|---|
-| Claude Code | `UserPromptSubmit`, `PreToolUse` | `Stop`, `SessionEnd` |
+| Claude Code | `UserPromptSubmit`, `PreToolUse` | `Stop`, `StopFailure`, `SessionEnd` |
 | Codex | `UserPromptSubmit`, `PreToolUse` | `Stop`, `Interrupt`, `SessionEnd` |
+
+Claude Code fires `StopFailure` instead of `Stop` when an API error (lost connection,
+rate limit, overload) ends the turn, so the lock goes away then too. Codex has no
+such hook, so the sweep below reads the Codex session log instead.
 
 After every change, `awake` counts the locks:
 
@@ -32,8 +36,10 @@ After every change, `awake` counts the locks:
   tool), awake leaves it alone.
 
 A launchd job runs `awake sweep` every minute. It drops locks whose agent process
-has exited (crash, closed window) and locks with no heartbeat for 45 minutes, so a
-crashed session can't keep your laptop awake forever.
+has exited (crash, closed window), locks of Codex turns that ended without a `Stop`
+hook (lost connection, API error; seen in the session log in `~/.codex/sessions`),
+and locks with no heartbeat for 45 minutes, so a crashed or failed session can't keep
+your laptop awake forever.
 
 ### Why `pmset disablesleep` and not `caffeinate`
 
