@@ -6,6 +6,8 @@ All notable changes are listed here. The format follows
 
 ## Unreleased
 
+## 0.1.2
+
 - Release the Claude Code lock when an API error (lost connection, rate limit) ends the turn
 - `awake sweep` drops the Codex lock when the session log shows the turn ended without a `Stop` hook
 
