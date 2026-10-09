@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Ask a question
+    url: https://github.com/przxmus/agent-awake/discussions/categories/q-a
+    about: Setup help and questions go to Discussions.
   - name: Report a security vulnerability
     url: https://github.com/przxmus/agent-awake/security/advisories/new
     about: Please report security problems privately, not in a public issue.
