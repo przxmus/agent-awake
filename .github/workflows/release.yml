@@ -1,0 +1,150 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump
+        type: choice
+        required: true
+        default: patch
+        options: [patch, minor, major, custom]
+      custom_version:
+        description: Version for "custom" (X.Y.Z, without the v)
+        type: string
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Require main
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Run this workflow from main (got $GITHUB_REF)"
+            exit 1
+          fi
+
+      - name: Install shellcheck
+        run: command -v shellcheck || brew install shellcheck
+
+      - name: Checks
+        run: |
+          shellcheck bin/awake install.sh uninstall.sh tests/run.sh
+          tests/run.sh
+
+      - name: Resolve version
+        id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+          CUSTOM: ${{ inputs.custom_version }}
+        run: |
+          prev_tag=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)
+          base=${prev_tag#v}
+          base=${base:-$(tr -d '[:space:]' < VERSION)}
+
+          if [ "$BUMP" = custom ]; then
+            next=${CUSTOM#v}
+          else
+            IFS=. read -r major minor patch <<< "$base"
+            case "$BUMP" in
+              major) next="$((major + 1)).0.0" ;;
+              minor) next="$major.$((minor + 1)).0" ;;
+              patch) next="$major.$minor.$((patch + 1))" ;;
+            esac
+          fi
+
+          if ! [[ "$next" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'$next' is not a valid X.Y.Z version"
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/v$next" >/dev/null; then
+            echo "::error::Tag v$next already exists"
+            exit 1
+          fi
+
+          {
+            echo "prev_tag=$prev_tag"
+            echo "version=$next"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing v$next (previous: ${prev_tag:-none})"
+
+      - name: Generate release notes
+        env:
+          PREV_TAG: ${{ steps.version.outputs.prev_tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          range=${PREV_TAG:+$PREV_TAG..}HEAD
+          git log "$range" --no-merges --format='%h%x09%s' > commits.tsv
+
+          section() { # title, extended regex matched against the subject
+            local out
+            out=$(awk -F'\t' -v re="$2" '$2 ~ re { print }' commits.tsv |
+              while IFS=$'\t' read -r sha subject; do
+                printf -- '- %s (%s)\n' "$subject" "$sha"
+              done)
+            if [ -n "$out" ]; then
+              printf '### %s\n\n%s\n\n' "$1" "$out"
+            fi
+          }
+
+          {
+            section "Breaking changes" '^[a-z]+(\([^)]*\))?!:'
+            section "Features" '^feat(\([^)]*\))?:'
+            section "Fixes" '^fix(\([^)]*\))?:'
+            section "Performance" '^perf(\([^)]*\))?:'
+            section "Documentation" '^docs(\([^)]*\))?:'
+            section "Maintenance" '^(chore|ci|build|refactor|test|style|revert)(\([^)]*\))?:'
+            section "Other" '^([^:]*$|[^a-z]|[a-z]+[^a-z(!:])'
+            if [ -n "$PREV_TAG" ]; then
+              printf '**Full changelog**: https://github.com/%s/compare/%s...v%s\n' "$REPO" "$PREV_TAG" "$VERSION"
+            fi
+          } > notes.md
+
+          if [ ! -s notes.md ]; then
+            echo "No changes since ${PREV_TAG:-the beginning}." > notes.md
+          fi
+          cat notes.md
+
+      - name: Update VERSION and CHANGELOG
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          echo "$VERSION" > VERSION
+          awk -v v="$VERSION" '
+            /^## Unreleased/ && !done { print; print ""; print "## " v; print ""; done=1; skip=1; next }
+            skip && /^$/ { skip=0; next }
+            { print }
+          ' CHANGELOG.md > CHANGELOG.new
+          mv CHANGELOG.new CHANGELOG.md
+
+      - name: Commit, tag and push
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add VERSION CHANGELOG.md
+          git commit -m "chore: release v$VERSION"
+          git tag -a "v$VERSION" -m "v$VERSION"
+          git push origin HEAD:main "v$VERSION"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "v$VERSION" --title "v$VERSION" --notes-file notes.md --verify-tag

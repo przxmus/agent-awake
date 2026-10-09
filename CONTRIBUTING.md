@@ -64,10 +64,13 @@ updating (for example, reinstall or re-trust hooks).
 
 ## Releases (maintainers)
 
-1. Move the `Unreleased` entries in `CHANGELOG.md` under a new version heading.
-2. Bump `VERSION` ([semver](https://semver.org/)).
-3. Commit as `chore: release vX.Y.Z`, tag `vX.Y.Z` and push the tag.
-4. Create a GitHub release from the tag with the changelog entries.
+Releases are cut from the **Release** workflow (Actions → Release → Run workflow on `main`).
+
+1. Pick `patch`, `minor` or `major` to bump the latest `vX.Y.Z` tag, or `custom` and fill in `custom_version`.
+2. The workflow runs shellcheck and the tests, moves the `Unreleased` entries in `CHANGELOG.md` under the new version, bumps `VERSION`, commits `chore: release vX.Y.Z`, tags it and pushes to `main`.
+3. The GitHub release notes are generated from the commits since the previous tag, grouped by conventional commit type.
+
+If `main` is protected, allow `github-actions[bot]` to push to it.
 
 Users get the release through `awake update`, which pulls `main`.
 
