@@ -3,7 +3,7 @@
 ObjC.import('Foundation');
 
 const EVENTS = {
-  claude: { UserPromptSubmit: 'on', PreToolUse: 'on', Stop: 'off', SessionEnd: 'off' },
+  claude: { UserPromptSubmit: 'on', PreToolUse: 'on', Stop: 'off', StopFailure: 'off', SessionEnd: 'off' },
   codex: { UserPromptSubmit: 'on', PreToolUse: 'on', Stop: 'off', Interrupt: 'off', SessionEnd: 'off' },
 };
 

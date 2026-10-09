@@ -21,8 +21,11 @@ create and remove the locks:
 
 | Agent | Takes the lock (heartbeat) | Releases the lock |
 |---|---|---|
-| Claude Code | `UserPromptSubmit`, `PreToolUse` | `Stop`, `SessionEnd` |
+| Claude Code | `UserPromptSubmit`, `PreToolUse` | `Stop`, `StopFailure`, `SessionEnd` |
 | Codex | `UserPromptSubmit`, `PreToolUse` | `Stop`, `Interrupt`, `SessionEnd` |
+
+Claude Code fires `StopFailure` instead of `Stop` when an API error (lost connection,
+rate limit, overload) ends the turn, so the lock goes away then too.
 
 After every change, `awake` counts the locks:
 
